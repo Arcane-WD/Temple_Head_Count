@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual Envs
+.venv/
+.env/
+
+# VSCode
+.vscode/
+
+# Data
+data/
+*.mp4
+*.avi
+*.mov
+
+# Model Weights
+*.pt
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
