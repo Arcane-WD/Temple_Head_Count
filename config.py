@@ -2,14 +2,16 @@ import os
 import torch
 
 # Paths
-INPUT_VIDEO = "data/input_vids/PETS09-S2L2-raw.mp4"
+INPUT_VIDEO = "data/input_vids/InpVid"
 OUTPUT_DIR = "data/output_vids"
 ANNOTATED_DIR = os.path.join(OUTPUT_DIR, "annotated_vids")
 LOG_DIR = os.path.join(OUTPUT_DIR, "logs")
 
-# Calibration
-AUTO_CALIBRATE = True  # If True, compute gate before running pipeline
-CALIBRATION_FRAMES = 400
+# Calibration Constants
+AUTO_CALIBRATE = True  
+MAX_CALIBRATION_FRAMES = 400
+CALIBRATION_FRACTION = 0.8
+MIN_FRAMES_FOR_CALIBRATION = 300  # Avoid calibrating on 9-second noise
 
 # Device Config
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -20,11 +22,10 @@ CONF_THRESH = 0.35
 IOU_THRESH = 0.65
 TARGET_CLASSES = [0]  # Person only
 
-# Counting Gate (Auto-calibrated or manual)
-# These are the coordinates you'll update after running the calibrator
+# Counting Gate (Fallback/Manual coordinates)
 GATE_LINE = [
-    (511, 89),
-    (448, 546)
+    (89, 511),
+    (546,448)
 ]
 
 # Tracker Config

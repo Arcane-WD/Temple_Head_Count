@@ -4,18 +4,25 @@ from ultralytics import YOLO
 import config
 
 def auto_calibrate_gate(video_path, frames_to_analyze=400):
-    print(f"Starting calibration on first {frames_to_analyze} frames of {video_path}...")
+    print(f"Starting Strict Kinematic Calibration on {video_path}...")
     
+    # --- PRODUCTION THRESHOLDS ---
+    MIN_VECTOR_THRESHOLD = 100  # Require a statistically significant sample size
+    REJECT_RATIO = 1.5          # If variance ratio is below this, reject completely
+    WARN_RATIO = 3.0            # If variance ratio is below this, warn the user
+
     model = YOLO(config.MODEL_PATH)
-    model.to(config.DEVICE)
+    if config.DEVICE == "cuda":
+        model.to("cuda")
 
     cap = cv2.VideoCapture(video_path)
-    
-    # 🐛 FIX APPLIED: Grab width and height BEFORE releasing the capture
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    motion_points = []
+    anchor_points = []
+    motion_vectors = []
+    track_history = {} 
+    
     frame_count = 0
 
     while frame_count < frames_to_analyze:
@@ -35,12 +42,24 @@ def auto_calibrate_gate(video_path, frames_to_analyze=400):
 
         if results[0].boxes is not None and results[0].boxes.id is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy()
+            track_ids = results[0].boxes.id.int().cpu().tolist()
 
-            for box in boxes:
+            for box, track_id in zip(boxes, track_ids):
                 x1, y1, x2, y2 = box
                 anchor_x = int((x1 + x2) / 2)
                 anchor_y = int(y2)
-                motion_points.append([anchor_x, anchor_y])
+                
+                anchor_points.append([anchor_x, anchor_y])
+                
+                if track_id in track_history:
+                    prev_x, prev_y = track_history[track_id]
+                    dx = anchor_x - prev_x
+                    dy = anchor_y - prev_y
+                    
+                    if abs(dx) > 2 or abs(dy) > 2:
+                        motion_vectors.append([dx, dy])
+                
+                track_history[track_id] = (anchor_x, anchor_y)
 
         frame_count += 1
         if frame_count % 100 == 0:
@@ -48,30 +67,55 @@ def auto_calibrate_gate(video_path, frames_to_analyze=400):
 
     cap.release()
 
-    if len(motion_points) < 20:
-        print("❌ Not enough motion data detected to calibrate.")
+    # 🛡️ FAIL-SAFE 1: Insufficient Data
+    if len(motion_vectors) < MIN_VECTOR_THRESHOLD:
+        print("\n" + "❌ "*15)
+        print(f"CALIBRATION FAILED: Insufficient motion data.")
+        print(f"Found {len(motion_vectors)} vectors. Required: {MIN_VECTOR_THRESHOLD}.")
+        print("ACTION: Do not update config.py. Use your manual GATE_LINE.")
+        print("❌ "*15)
         return None
 
-    # --- PCA Math ---
-    data = np.array(motion_points, dtype=np.float32)
-    mean, eigenvectors, _ = cv2.PCACompute2(data, np.empty((0)))
+    spatial_data = np.array(anchor_points, dtype=np.float32)
+    spatial_mean = np.mean(spatial_data, axis=0)
+    center = (int(spatial_mean[0]), int(spatial_mean[1]))
 
-    center = (int(mean[0, 0]), int(mean[0, 1]))
+    motion_data = np.array(motion_vectors, dtype=np.float32)
+    _, eigenvectors, eigenvalues = cv2.PCACompute2(motion_data, np.empty((0)))
 
-    # Perpendicular vector (gate line direction)
-    gate_vector = eigenvectors[1]
+    flow_dir = eigenvectors[0] 
+    ratio = eigenvalues[0][0] / (eigenvalues[1][0] + 1e-6)
+    
+    print(f"\nMotion Confidence Ratio: {ratio:.2f}")
 
-    line_length = min(width, height) * 0.4
+    # 🛡️ FAIL-SAFE 2: Chaotic Crowd Rejection
+    if ratio < REJECT_RATIO:
+        print("\n" + "❌ "*15)
+        print("CALIBRATION FAILED: Crowd motion is too chaotic/multi-directional.")
+        print(f"Ratio {ratio:.2f} is below strict rejection threshold of {REJECT_RATIO}.")
+        print("ACTION: Do not update config.py. Use your manual GATE_LINE.")
+        print("❌ "*15)
+        return None
+    elif ratio < WARN_RATIO:
+        print("⚠️ WARNING: Motion is somewhat dispersed. Verify the output line visually before trusting it.")
 
-    # Calculate raw points
+    gate_vector = np.array([-flow_dir[1], flow_dir[0]])
+    line_length = min(width, height) * 0.45
+
     raw_pt1_x = int(center[0] - gate_vector[0] * line_length)
     raw_pt1_y = int(center[1] - gate_vector[1] * line_length)
     raw_pt2_x = int(center[0] + gate_vector[0] * line_length)
     raw_pt2_y = int(center[1] + gate_vector[1] * line_length)
 
-    # 🛡️ ENHANCEMENT: Clamp to frame dimensions to avoid Ultralytics out-of-bounds errors
     pt1 = (max(0, min(width, raw_pt1_x)), max(0, min(height, raw_pt1_y)))
     pt2 = (max(0, min(width, raw_pt2_x)), max(0, min(height, raw_pt2_y)))
+
+    print("\n" + "="*40)
+    print("✅ KINEMATIC CALIBRATION SUCCESSFUL")
+    print("="*40)
+    print("Paste this into config.py:\n")
+    print(f"GATE_LINE = [\n    {pt1},\n    {pt2}\n]")
+    print("="*40)
 
     return [pt1, pt2]
 
