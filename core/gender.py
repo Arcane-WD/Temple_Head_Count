@@ -108,7 +108,13 @@ class GenderClassifier:
         if crop.size == 0:
             return None
 
-        crop = cv2.resize(crop, (224, 224))
+        # Replicate PyTorch Resize((256, 128)) then CenterCrop((224, 112))
+        crop = cv2.resize(crop, (128, 256))
+        
+        start_y = (256 - 224) // 2
+        start_x = (128 - 112) // 2
+        crop = crop[start_y:start_y+224, start_x:start_x+112]
+
         crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
 
         crop = crop.astype(np.float32) / 255.0

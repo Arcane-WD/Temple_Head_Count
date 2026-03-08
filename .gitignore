@@ -20,6 +20,10 @@ data/
 
 # Model Weights
 *.pt
+*.onnx
+
+# Ultralytics auto-generated
+runs/
 
 # Logs
 *.log

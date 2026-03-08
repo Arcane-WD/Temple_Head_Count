@@ -39,6 +39,8 @@ def run_pipeline():
     # Initialize engine
     engine = TempleCounter()
     frame_count = 0
+    in_count = 0
+    out_count = 0
 
     print(f"🚀 Processing: {video_path}")
 
@@ -59,6 +61,7 @@ def run_pipeline():
     cap.release()
     out.release()
     print(f"✅ Processing Complete. Total Entries: {in_count}")
+    print(f"📁 Output saved to: {output_path}")
 
 if __name__ == "__main__":
     run_pipeline()

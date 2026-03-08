@@ -29,19 +29,15 @@ class TempleCounter:
         )
 
     def process_frame(self, frame, frame_idx):
-        results = self.counter(frame)
+        res = self.counter(frame)
+        annotated_frame = res.plot_im.copy()
 
-        if isinstance(results, list):
-            res = results[0]
-            # Use .copy() to avoid modifying the original frame in memory
-            annotated_frame = res.plot_im.copy()
-        else:
-            res = results
-            annotated_frame = res.plot_im.copy()
+        boxes = self.counter.boxes
+        ids = self.counter.track_ids
 
-        if res.boxes is not None and res.boxes.id is not None:
-            boxes = res.boxes.xyxy.cpu().numpy()
-            ids = res.boxes.id.int().cpu().tolist()
+        if boxes is not None and len(boxes) > 0 and len(ids) == len(boxes):
+            if hasattr(boxes, 'cpu'):
+                boxes = boxes.cpu().numpy()
 
             for box, track_id in zip(boxes, ids):
                 x1, y1, x2, y2 = map(int, box)
@@ -51,6 +47,8 @@ class TempleCounter:
                 x2, y2 = min(w_frame, x2), min(h_frame, y2)
 
                 crop = frame[y1:y2, x1:x2]
+                if crop.size == 0:
+                    continue
                 
                 gender = self.gender_classifier.get_gender(track_id, crop, frame_idx)
 

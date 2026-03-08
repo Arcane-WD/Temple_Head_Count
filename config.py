@@ -26,7 +26,7 @@ TRACKER_CONFIG = "custom_bytetrack.yaml"
 GATE_LINE = [(89, 511), (546, 448)]
 
 # --- GENDER MODEL CONFIG ---
-GENDER_MODEL_PATH = os.path.join(MODEL_DIR, "gender_classifier.onnx")
+GENDER_MODEL_PATH = "convnext_tiny_gender_82.44acc.onnx"
 GENDER_REQUIRED_VOTES = 5
 GENDER_CONF_THRESH = 0.65
 STALE_TRACK_TIMEOUT = 100
