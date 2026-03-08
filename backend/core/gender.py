@@ -14,19 +14,17 @@ class GenderClassifier:
             self.session = ort.InferenceSession(model_path, providers=providers)
             self.input_name = self.session.get_inputs()[0].name
             
-            # 🚨 FIX 1: Explicit Output Shape Logging
             output_details = self.session.get_outputs()[0]
             self.output_name = output_details.name
-            print(f"✅ Gender ONNX Loaded. Expected Output Shape: {output_details.shape}")
-            print("⚠️ NOTE: Ensure output index 0=Female, 1=Male. If different, update GenderClassifier logic.")
+            print(f"Gender ONNX Loaded. Expected Output Shape: {output_details.shape}")
             
         except Exception as e:
-            print(f"⚠️ Warning: Could not load ONNX model at {model_path}. Gender classification disabled.")
+            print(f"Warning: Could not load ONNX model at {model_path}. Gender classification disabled.")
             self.session = None
 
         self.required_votes = required_votes
         self.stale_timeout = stale_timeout
-        self.confidence_thresh = confidence_thresh # 🚨 FIX 2: Confidence Threshold
+        self.confidence_thresh = confidence_thresh
         
         # State Management
         self.track_cache = {}       
@@ -53,8 +51,6 @@ class GenderClassifier:
         if len(self.track_buffer[track_id]) >= self.required_votes:
             avg_probs = np.mean(self.track_buffer[track_id], axis=0)
             
-            # 🚨 FIX 1 & 2: Explicit mapping and confidence check
-            # We will explicitly map this when we export the Torchreid model
             female_prob = avg_probs[0]
             male_prob = avg_probs[1]
 
@@ -89,10 +85,10 @@ class GenderClassifier:
         outputs = self.session.run([self.output_name], {self.input_name: processed})
         logits = outputs[0].flatten()
         if logits.shape[0] != 2:
-            print("⚠️ Unexpected gender output shape:", logits.shape)
+            print("Unexpected gender output shape:", logits.shape)
             return None
 
-        # Apply softmax (if model does NOT already include softmax)
+        # Apply softmax
         exp_logits = np.exp(logits - np.max(logits))
         probs = exp_logits / exp_logits.sum()
 
@@ -103,7 +99,7 @@ class GenderClassifier:
         if h == 0 or w == 0:
             return None
 
-        # 🚨 FIX 4: 85% Crop to preserve face/chin on steep CCTV angles
+        # 85% Crop to preserve face/chin on steep CCTV angles
         crop = crop[: int(h * 0.85), :]
         if crop.size == 0:
             return None

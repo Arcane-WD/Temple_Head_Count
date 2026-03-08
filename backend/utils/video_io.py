@@ -1,5 +1,4 @@
 import cv2
-import os
 
 def get_video_properties(video_path):
     cap = cv2.VideoCapture(video_path)

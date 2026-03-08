@@ -4,21 +4,27 @@ __pycache__/
 *.pyo
 *.pyd
 *.so
+*.egg-info/
+dist/
+build/
 
-# Virtual Envs
+# Virtual Environments
 .venv/
 .env/
+venv/
+env/
 
-# VSCode
+# IDE
 .vscode/
+.idea/
 
-# Data
+# Data and Media
 data/
 *.mp4
 *.avi
 *.mov
 
-# Model Weights
+# Model Weights (large binary files)
 *.pt
 *.onnx
 
@@ -27,7 +33,18 @@ runs/
 
 # Logs
 *.log
+logs/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+
+# Temporary files
+*.tmp
+*.bak

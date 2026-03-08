@@ -4,12 +4,18 @@ from ultralytics import YOLO
 import config
 
 def auto_calibrate_gate(video_path, frames_to_analyze=400):
-    print(f"Starting Strict Kinematic Calibration on {video_path}...")
-    
-    # --- PRODUCTION THRESHOLDS ---
-    MIN_VECTOR_THRESHOLD = 100  # Require a statistically significant sample size
-    REJECT_RATIO = 1.5          # If variance ratio is below this, reject completely
-    WARN_RATIO = 3.0            # If variance ratio is below this, warn the user
+    """
+    Returns a dict with:
+      - 'status': 'success' | 'low_frame_count' | 'chaotic_motion' | 'chaotic_motion_warn'
+      - 'gate_line': [(x1,y1), (x2,y2)] or None
+      - 'ratio': float or None
+      - 'vectors_found': int
+      - 'message': str (technical)
+      - 'layman': str (user-friendly)
+    """
+    MIN_VECTOR_THRESHOLD = 100
+    REJECT_RATIO = 1.5
+    WARN_RATIO = 3.0
 
     model = YOLO(config.MODEL_PATH)
     if config.DEVICE == "cuda":
@@ -62,19 +68,19 @@ def auto_calibrate_gate(video_path, frames_to_analyze=400):
                 track_history[track_id] = (anchor_x, anchor_y)
 
         frame_count += 1
-        if frame_count % 100 == 0:
-            print(f"Analyzed {frame_count}/{frames_to_analyze} frames...")
 
     cap.release()
 
-    # 🛡️ FAIL-SAFE 1: Insufficient Data
+    # FAIL-SAFE 1: Insufficient Data
     if len(motion_vectors) < MIN_VECTOR_THRESHOLD:
-        print("\n" + "❌ "*15)
-        print(f"CALIBRATION FAILED: Insufficient motion data.")
-        print(f"Found {len(motion_vectors)} vectors. Required: {MIN_VECTOR_THRESHOLD}.")
-        print("ACTION: Do not update config.py. Use your manual GATE_LINE.")
-        print("❌ "*15)
-        return None
+        return {
+            "status": "chaotic_motion",
+            "gate_line": None,
+            "ratio": None,
+            "vectors_found": len(motion_vectors),
+            "message": f"Insufficient motion data. Found {len(motion_vectors)} vectors, required {MIN_VECTOR_THRESHOLD}.",
+            "layman": "Not enough movement was detected in the video for the system to determine a reliable counting line. Try using a longer video with more visible foot traffic."
+        }
 
     spatial_data = np.array(anchor_points, dtype=np.float32)
     spatial_mean = np.mean(spatial_data, axis=0)
@@ -85,19 +91,17 @@ def auto_calibrate_gate(video_path, frames_to_analyze=400):
 
     flow_dir = eigenvectors[0] 
     ratio = eigenvalues[0][0] / (eigenvalues[1][0] + 1e-6)
-    
-    print(f"\nMotion Confidence Ratio: {ratio:.2f}")
 
-    # 🛡️ FAIL-SAFE 2: Chaotic Crowd Rejection
+    # FAIL-SAFE 2: Chaotic Crowd Rejection
     if ratio < REJECT_RATIO:
-        print("\n" + "❌ "*15)
-        print("CALIBRATION FAILED: Crowd motion is too chaotic/multi-directional.")
-        print(f"Ratio {ratio:.2f} is below strict rejection threshold of {REJECT_RATIO}.")
-        print("ACTION: Do not update config.py. Use your manual GATE_LINE.")
-        print("❌ "*15)
-        return None
-    elif ratio < WARN_RATIO:
-        print("⚠️ WARNING: Motion is somewhat dispersed. Verify the output line visually before trusting it.")
+        return {
+            "status": "chaotic_motion",
+            "gate_line": None,
+            "ratio": float(ratio),
+            "vectors_found": len(motion_vectors),
+            "message": f"Crowd motion is too chaotic. Ratio {ratio:.2f} is below rejection threshold {REJECT_RATIO}.",
+            "layman": "The crowd movement in this video is too random for the computer to draw a reliable counting line. Try a video with a clearer flow direction."
+        }
 
     gate_vector = np.array([-flow_dir[1], flow_dir[0]])
     line_length = min(width, height) * 0.45
@@ -110,14 +114,21 @@ def auto_calibrate_gate(video_path, frames_to_analyze=400):
     pt1 = (max(0, min(width, raw_pt1_x)), max(0, min(height, raw_pt1_y)))
     pt2 = (max(0, min(width, raw_pt2_x)), max(0, min(height, raw_pt2_y)))
 
-    print("\n" + "="*40)
-    print("✅ KINEMATIC CALIBRATION SUCCESSFUL")
-    print("="*40)
-    print("Paste this into config.py:\n")
-    print(f"GATE_LINE = [\n    {pt1},\n    {pt2}\n]")
-    print("="*40)
+    result = {
+        "status": "success",
+        "gate_line": [pt1, pt2],
+        "ratio": float(ratio),
+        "vectors_found": len(motion_vectors),
+        "message": f"Calibration successful. Ratio: {ratio:.2f}",
+        "layman": "The system successfully determined the optimal counting line based on crowd flow patterns."
+    }
 
-    return [pt1, pt2]
+    if ratio < WARN_RATIO:
+        result["status"] = "chaotic_motion_warn"
+        result["layman"] = "The crowd movement is somewhat scattered. Results may be less accurate than usual. Consider verifying the counting line manually."
+
+    return result
 
 if __name__ == "__main__":
-    auto_calibrate_gate(config.INPUT_VIDEO)
+    result = auto_calibrate_gate("data/input_vids/InpVid1.mp4")
+    print(result)

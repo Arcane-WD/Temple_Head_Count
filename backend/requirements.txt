@@ -6,3 +6,5 @@ pyyaml
 onnxruntime
 numpy
 shapely
+fastapi
+uvicorn[standard]
