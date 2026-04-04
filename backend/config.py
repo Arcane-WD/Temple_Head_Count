@@ -1,32 +1,40 @@
 import os
 import torch
 
-# Paths (relative to backend/)
-INPUT_DIR = "data/input_vids"
-OUTPUT_DIR = "data/output_vids"
+# Dynamically resolve the absolute path to the backend/ folder
+# so all model/data paths work regardless of where python is invoked from.
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Data Paths
+INPUT_DIR = os.path.join(BACKEND_DIR, "data", "input_vids")
+OUTPUT_DIR = os.path.join(BACKEND_DIR, "data", "output_vids")
 ANNOTATED_DIR = os.path.join(OUTPUT_DIR, "annotated_vids")
 LOG_DIR = os.path.join(OUTPUT_DIR, "logs")
-MODEL_DIR = "models"
-
-# Calibration Constants
-AUTO_CALIBRATE = True
-MAX_CALIBRATION_FRAMES = 400
-CALIBRATION_FRACTION = 0.8
-MIN_FRAMES_FOR_CALIBRATION = 300
 
 # Device Config
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Tracking & Detection Config
-MODEL_PATH = "yolov8s.pt"
-CONF_THRESH = 0.35
+# --- DETECTION CONFIG ---
+MODEL_PATH = os.path.join(BACKEND_DIR, "yolov8s.pt")
+CONF_THRESH = 0.50          # Increased from 0.35 to ignore low-confidence noise
 IOU_THRESH = 0.65
 TARGET_CLASSES = [0]
-TRACKER_CONFIG = "custom_bytetrack.yaml"
-GATE_LINE = [(89, 511), (546, 448)]
+
+# --- RE-ID CONFIG ---
+REID_MODEL = "osnet_x1_0"
+REID_SKIP_FRAMES = 5
+REID_MATCH_THRESHOLD = 0.65  # Decreased from 0.75 to prevent track splitting
+REID_EVICTION_TIMEOUT = 500
+REID_GRACE_PERIOD = 7500
+
+# Worker Exclusion Zones
+EXCLUSION_ZONES = {
+    "channel_1_main": [],
+    "channel_5_main": [],
+}
 
 # --- GENDER MODEL CONFIG ---
-GENDER_MODEL_PATH = "convnext_tiny_gender_82.44acc.onnx"
+GENDER_MODEL_PATH = os.path.join(BACKEND_DIR, "convnext_tiny_gender_82.44acc.onnx")
 GENDER_REQUIRED_VOTES = 5
 GENDER_CONF_THRESH = 0.65
 STALE_TRACK_TIMEOUT = 100

@@ -1,224 +1,154 @@
 # Temple Head Count System
 
-A modular, GPU-accelerated computer vision pipeline for automated entry/exit analytics and demographic classification, exposed as a real-time analytics web dashboard.
+A high-performance, GPU-accelerated computer vision pipeline for automated visitor counting and demographic classification at temple entrances using CCTV footage.
 
-The system combines YOLO-based person detection, ByteTrack multi-object tracking, dynamic gate calibration, ONNX-based gender classification, and entry-event-anchored demographic counting — all served through a FastAPI backend and visualized in a Next.js frontend.
-
-Designed for fixed CCTV installations monitoring physical entry gates such as temple doorways, stadium entrances, or turnstiles.
+The system uses **YOLOv8** for detection, **OSNet Re-ID** embeddings for identity tracking, and **ConvNeXt-Tiny** for gender classification. It is specifically optimized to handle "non-flowing" crowds (people sitting, praying, or milling) without traditional gate-line logic.
 
 ---
 
-## System Architecture
+## Architecture & Performance
+
+The system is engineered for maximum throughput by decoupling heavy ML inference from I/O and reporting.
+
+-   **Decoupled ML Loop**: The main processing loop runs at full GPU speed, isolated from disk I/O and network reporting.
+-   **Threaded Reporting**: Progress updates (SSE) and timeline logging run on a separate heartbeat thread to prevent GIL contention.
+-   **Async Video Writer**: Annotated frames are written via a threaded producer-consumer queue.
+-   **Timelapse Output**: The system generates a high-efficiency timelapse video (`fps / SKIP_FRAMES`), drastically reducing disk usage and encoding time.
+-   **Zero-Copy Skip-Frames**: Detections are performed every $k$ frames; skipped frames skip all memory allocations, copies, and drawing operations.
 
 ```
 temple_proj/
-├─ backend/              Python pipeline + FastAPI API server
-│  ├─ core/
-│  │  ├─ counter.py      ObjectCounter wrapper with demographic tracking
-│  │  └─ gender.py       ConvNeXt-Tiny ONNX inference with majority voting
-│  ├─ utils/
-│  │  └─ video_io.py     Video capture and writer utilities
-│  ├─ data/
-│  │  ├─ input_vids/     Input video files
-│  │  └─ output_vids/    Annotated output and logs
-│  ├─ calibrate.py       Kinematic motion-vector PCA gate calibration
-│  ├─ config.py          Central configuration
-│  ├─ custom_bytetrack.yaml
-│  ├─ server.py          FastAPI server
-│  └─ requirements.txt
+├── backend/                     Python ML pipeline + FastAPI server
+│   ├── core/
+│   │   ├── counter.py           Orchestrator: YOLO → ZoneFilter → ReID → Gender
+│   │   ├── reid_engine.py       OSNet-x1_0 feature extraction (torchreid)
+│   │   ├── reid_tracker.py      Hungarian matching, EMA updates, grace period
+│   │   ├── zone_filter.py       Polygon-based worker exclusion zones
+│   │   └── gender.py            ConvNeXt-Tiny ONNX gender classifier
+│   ├── utils/
+│   │   └── video_io.py          Video capture/writer helpers
+│   ├── data/
+│   │   ├── input_vids/          Source video files (.mp4)
+│   │   └── output_vids/         Annotated output and logs
+│   ├── config.py                All thresholds, model paths, zone definitions
+│   ├── server.py                Highly optimized FastAPI server (Async I/O + Threaded Reporting)
+│   ├── main_cli.py              Standalone CLI runner (no server needed)
+│   ├── requirements.txt
+│   ├── yolov8s.pt               YOLO weights (not committed)
+│   └── convnext_tiny_*.onnx     Gender model (not committed)
 │
-├─ frontend/             Next.js analytics dashboard
-│  ├─ app/
-│  │  ├─ page.tsx        Main dashboard page
-│  │  ├─ layout.tsx      Root layout and metadata
-│  │  └─ globals.css     Design system and Tailwind setup
-│  ├─ components/
-│  │  ├─ StatCard.tsx    Live analytics cards (IN, OUT, Male, Female, Unknown)
-│  │  ├─ FlowChart.tsx   Flow-over-time Recharts line graph
-│  │  ├─ ModelSidebar.tsx   Model metadata panel
-│  │  ├─ VideoPanel.tsx  Video player with high-traffic timeline markers
-│  │  └─ AlertBanner.tsx    Error and warning banners
-│  ├─ lib/
-│  │  └─ api.ts          Type-safe API client with SSE subscription
-│  └─ package.json
+├── frontend/                    Next.js analytics dashboard
+│   ├── app/                     Page routes and global styles
+│   ├── components/              StatCard, FlowChart, VideoPanel, etc.
+│   ├── lib/                     API client and TypeScript types
+│   └── package.json
 │
-├─ main.py               Standalone CLI runner (no server required)
-├─ README.md
-└─ .gitignore
+├── aggregate_code.py            Codebase export utility
+├── test_run.py                  Diagnostic script (PCA, similarity plots)
+└── README.md
 ```
-
-Model weights (`.pt`, `.onnx`) and runtime video data are excluded from version control.
-
----
-
-## Core Components
-
-| Component | Technology | Notes |
-|---|---|---|
-| Person Detection | YOLOv8s | Configured via `config.py` |
-| Multi-Object Tracking | ByteTrack | Custom tracker config |
-| Directional Counting | Ultralytics ObjectCounter | Entry/exit line-crossing events |
-| Demographic Counting | Custom centroid tracking | Anchored to ObjectCounter `in_count` delta |
-| Gender Classification | ConvNeXt-Tiny (ONNX) | 82.44% accuracy on PA-100K |
-| Gate Calibration | Kinematic PCA | Motion-vector-based, auto-bypass on short clips |
-| Backend API | FastAPI + SSE | Real-time frame streaming to frontend |
-| Frontend | Next.js + Tailwind CSS v4 + Recharts | Dark-mode analytics dashboard |
-
----
-
-## Backend API Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/videos` | List available `.mp4` files |
-| POST | `/api/upload` | Upload a new video to the input directory |
-| POST | `/api/process` | Start pipeline for a given filename, returns `job_id` |
-| GET | `/api/status/{job_id}` | Server-Sent Events stream (frame, counts, demographics) |
-| GET | `/api/results/{job_id}` | Final analytics and timeline JSON |
-| GET | `/api/video/{filename}` | Serve processed or input video for playback |
 
 ---
 
 ## Pipeline Flow
 
-1. Video selection (via dashboard upload or local file placement)
-2. Frame count validation
-3. Optional kinematic gate calibration
-4. Frame-by-frame: detection, tracking, line-crossing detection
-5. Per-entry demographic classification with majority-vote locking
-6. Annotated video write and H.264 re-encode for browser playback
-7. Timeline and final analytics returned to dashboard
-
-### Demographic Counting Logic
-
-Gender demographics are counted **only on entry** — a track is tallied at most once, only after it has both:
-- Triggered a line-crossing event in the IN direction (verified by centroid sign-change + ObjectCounter `in_count` delta)
-- Accumulated enough inference votes to resolve a confident classification
+```
+Video Frame (every 5th frame)
+    │
+    ▼
+YOLOv8s Detection ─── conf > 0.50, class 0 (person)
+    │
+    ▼
+Zone Filter ─── skip detections inside worker exclusion polygons
+    │
+    ▼
+OSNet-x1_0 Re-ID ─── 512-dim L2-normalized embeddings
+    │
+    ▼
+Hungarian Matching ─── cosine distance, θ = 0.65
+    ├── Matched → update active track (EMA embedding)
+    ├── Matched (departed) → re-activate (no new count)
+    └── Unmatched → new visitor (+1 cumulative)
+    │
+    ▼
+ConvNeXt-Tiny Gender ─── majority vote, locked after 5 frames
+    │
+    ▼
+Terminal / Dashboard Output
+```
 
 ---
 
-## Installation
+## Quick Start
 
-### Backend (Python venv)
+### Prerequisites
 
-```
+- Python 3.10+
+- Node.js 18+
+- `ffmpeg` (required for browser-compatible video re-encoding)
+- YOLO weights (`yolov8s.pt`) in `backend/`
+- Gender ONNX model (`convnext_tiny_gender_82.44acc.onnx`) in `backend/`
+
+### Install Dependencies
+
+```bash
+# Backend (activate your venv first)
 cd backend
-# Activate virtual environment first:
-# Windows:  .venv\Scripts\activate
-# Linux/Mac: source .venv/bin/activate
+uv pip install -r requirements.txt
 
-pip install -r requirements.txt
+# Frontend
+cd frontend
+npm install
+```
+
+### CLI Testing (No Server)
+
+```bash
+cd backend
+python main_cli.py
+```
+
+### Full Stack (Server + Dashboard)
+
+**Terminal 1 (Backend):**
+```bash
+cd backend
 python server.py
 ```
 
-Backend runs on `http://localhost:8000`.
-
-Requires CUDA-enabled PyTorch for GPU acceleration. ONNX Runtime with CUDA support enables GPU-accelerated gender classification.
-
-### Frontend (separate terminal, no venv)
-
-```
+**Terminal 2 (Frontend):**
+```bash
 cd frontend
-npm install
 npm run dev
 ```
-
-Frontend runs on `http://localhost:3000`.
-
----
-
-## CLI Usage (No Server)
-
-For offline standalone use without the web dashboard:
-
-```
-python main.py
-```
-
-Select the desired input video when prompted. Output is saved to `data/output_vids/annotated_vids/`.
 
 ---
 
 ## Configuration
 
-All runtime parameters are in `backend/config.py`.
+Settings are centralized in [`backend/config.py`](backend/config.py):
 
-### Detection and Tracking
-
-| Key | Description |
-|---|---|
-| `MODEL_PATH` | YOLO model weight file |
-| `CONF_THRESH` | Detection confidence threshold |
-| `IOU_THRESH` | NMS IoU threshold |
-| `TARGET_CLASSES` | Object class indices to track (default: `[0]` for persons) |
-| `TRACKER_CONFIG` | ByteTrack configuration file |
-| `GATE_LINE` | Manual gate line coordinates (overridden by auto-calibration) |
-
-### Calibration
-
-| Key | Description |
-|---|---|
-| `AUTO_CALIBRATE` | Enable automatic gate calibration |
-| `MAX_CALIBRATION_FRAMES` | Upper frame limit for calibration analysis |
-| `CALIBRATION_FRACTION` | Fraction of video used for calibration |
-| `MIN_FRAMES_FOR_CALIBRATION` | Minimum frames required to attempt calibration |
-
-### Gender Classification
-
-| Key | Description |
-|---|---|
-| `GENDER_MODEL_PATH` | Path to the ONNX gender classification model |
-| `GENDER_REQUIRED_VOTES` | Inference frames before locking a classification |
-| `GENDER_CONF_THRESH` | Minimum confidence for a valid classification |
-| `STALE_TRACK_TIMEOUT` | Frames before an unseen track is evicted from cache |
-
----
-
-## Error Handling
-
-The pipeline surfaces three structured error conditions to the dashboard:
-
-| Code | Cause | User Message |
+| Parameter | Default | Description |
 |---|---|---|
-| `LOW_FRAME_COUNT` | Video too short for calibration | Clip is too short for the system to analyze movement patterns. |
-| `CHAOTIC_MOTION` | Motion ratio below rejection threshold | Crowd movement is too random for reliable line placement. |
-| `CHAOTIC_MOTION_WARN` | Motion ratio below warning threshold | Results may be less accurate. Verify the counting line manually. |
+| `CONF_THRESH` | `0.50` | YOLO detection confidence |
+| `REID_MODEL` | `osnet_x1_0` | Re-ID model variant |
+| `REID_SKIP_FRAMES` | `5` | Process every k-th frame |
+| `REID_MATCH_THRESHOLD` | `0.65` | Cosine similarity cutoff |
+| `REID_EVICTION_TIMEOUT` | `500` | Frames before evicting unseen tracks |
+| `REID_GRACE_PERIOD` | `7500` | Frames before forgetting departed tracks |
+| `EXCLUSION_ZONES` | `{}` | Per-camera worker exclusion polygons |
+| `GENDER_REQUIRED_VOTES` | `5` | Frames before locking gender |
 
 ---
 
-## Performance
+## Diagnostics
 
-Tested on 576x768 CCTV footage:
-
-- 14-20 ms tracking time per frame
-- 45-50 FPS on RTX 3050 (CUDA)
-- Stable IN/OUT directional counts
-- Gender classification adds minimal latency due to ONNX inference and per-track vote caching
-
----
-
-## Design Principles
-
-- Modular backend with clean separation of detection, tracking, classification, and calibration
-- Entry-event-anchored demographic counting prevents false positives
-- Graceful degradation when optional components (ONNX model, ffmpeg) are unavailable
-- Structured error propagation from pipeline to UI with layman-friendly explanations
-- No facial recognition or biometric data storage
+Run `test_run.py` from the project root to validate YOLO detection rates, cluster quality (PCA), and similarity distribution. This is recommended before running on large datasets to ensure the $\theta$ threshold is optimal for your camera angles.
 
 ---
 
 ## Limitations
 
-- Designed for fixed-camera, single-gate scenarios
-- Not optimized for open-field crowd density estimation
-- Gender classification accuracy depends on crop quality and camera angle
-- Model weights are not included in the repository
-
----
-
-## Roadmap
-
-- JSON analytics export per session
-- Batch processing for large archive datasets
-- Multi-camera feed aggregation
-- Ground-truth benchmarking harness
+- Single-camera counting is verified; cross-camera deduplication is in development.
+- Re-entry after the grace period (~5 mins @ 25fps) counts as a new visit.
+- Gender accuracy depends on visibility and resolution of the face/body.

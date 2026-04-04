@@ -1,24 +1,28 @@
-from ultralytics import solutions
+from ultralytics import YOLO
 import cv2
+import numpy as np
+
 import config
 from core.gender import GenderClassifier
-
+from core.reid_engine import ReIDEngine
+from core.reid_tracker import ReIDTracker
+from core.zone_filter import ZoneFilter
 
 class TempleCounter:
-    def __init__(self):
-        self.counter = solutions.ObjectCounter(
-            model=config.MODEL_PATH,
-            region=config.GATE_LINE,
-            classes=config.TARGET_CLASSES,
-            conf=config.CONF_THRESH,
-            iou=config.IOU_THRESH,
-            tracker=config.TRACKER_CONFIG,
-            show=False,
-            verbose=False,
-        )
-
+    def __init__(self, camera_id="channel_1_main"):
+        # We use raw YOLO predict now, not ObjectCounter
+        self.detector = YOLO(config.MODEL_PATH)
         if config.DEVICE == "cuda":
-            self.counter.model.to(config.DEVICE)
+            self.detector.to(config.DEVICE)
+
+        self.reid_engine = ReIDEngine(model_name=config.REID_MODEL, device=config.DEVICE)
+        self.reid_tracker = ReIDTracker(
+            match_threshold=config.REID_MATCH_THRESHOLD,
+            eviction_timeout=config.REID_EVICTION_TIMEOUT,
+            grace_period=config.REID_GRACE_PERIOD
+        )
+        
+        self.zone_filter = ZoneFilter(config.EXCLUSION_ZONES.get(camera_id, []))
 
         self.gender_classifier = GenderClassifier(
             model_path=config.GENDER_MODEL_PATH,
@@ -28,102 +32,109 @@ class TempleCounter:
             device=config.DEVICE,
         )
 
-        # Demographic accumulators
+        # Track demographics for Unique Visitors
         self.male_count = 0
         self.female_count = 0
         self.unknown_count = 0
-
-        # State for entry-anchored demographic counting
-        self._prev_in_count = 0
-        self._pending_gender = set()    # entered but gender not yet resolved
-        self._counted_genders = set()   # already tallied
+        self._counted_genders = set() 
 
     def process_frame(self, frame, frame_idx):
-        res = self.counter(frame)
-        annotated_frame = res.plot_im.copy()
+        # Skip non-processed frames entirely — no copy, no draw
+        if frame_idx % config.REID_SKIP_FRAMES != 0:
+            return None, self.reid_tracker.cumulative_visitors
 
-        boxes = self.counter.boxes
-        ids = self.counter.track_ids
+        annotated_frame = frame.copy()
+        annotated_frame = self.zone_filter.draw_zones(annotated_frame)
 
-        current_ids = set()
+        # 1. Detection
+        results = self.detector.predict(
+            frame, 
+            classes=config.TARGET_CLASSES, 
+            conf=config.CONF_THRESH, 
+            iou=config.IOU_THRESH,
+            verbose=False
+        )
+        
+        boxes = results[0].boxes
+        if boxes is None or len(boxes) == 0:
+            self.reid_tracker.update([], frame_idx)
+            return annotated_frame, self.reid_tracker.cumulative_visitors
 
-        if boxes is not None and ids is not None and len(boxes) > 0 and len(ids) == len(boxes):
-            if hasattr(boxes, "cpu"):
-                boxes = boxes.cpu().numpy()
+        valid_crops = []
+        valid_boxes = []
 
-            # Build per-track info for this frame
-            track_info = []
-            for box, tid in zip(boxes, ids):
-                tid = int(tid)
-                current_ids.add(tid)
-                x1, y1, x2, y2 = map(int, box)
-                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-                track_info.append((tid, cx, cy, x1, y1, x2, y2))
+        if hasattr(boxes, "cpu"):
+            boxes = boxes.cpu().numpy()
 
-            # -----------------------------------------------------------
-            # When in_count increases, mark the N closest-to-line tracks
-            # that haven't been counted yet as "entered".
-            # This uses ObjectCounter as the sole authority on who entered.
-            # -----------------------------------------------------------
-            new_entries = self.counter.in_count - self._prev_in_count
-            if new_entries > 0:
-                p1, p2 = config.GATE_LINE
-                lmx, lmy = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
+        # 2. Filtering and Cropping
+        h, w = frame.shape[:2]
+        for box in boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+            
+            # Skip if inside worker exclusion zone
+            if self.zone_filter.is_excluded(cx, cy):
+                continue
+                
+            crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            if crop.size > 0:
+                valid_crops.append(crop)
+                valid_boxes.append((x1, y1, x2, y2))
 
-                candidates = []
-                for tid, cx, cy, *_ in track_info:
-                    if tid not in self._counted_genders and tid not in self._pending_gender:
-                        dist = (cx - lmx) ** 2 + (cy - lmy) ** 2
-                        candidates.append((dist, tid))
+        if not valid_crops:
+            self.reid_tracker.update([], frame_idx)
+            return annotated_frame, self.reid_tracker.cumulative_visitors
 
-                candidates.sort()  # closest first
-                for i in range(min(new_entries, len(candidates))):
-                    self._pending_gender.add(candidates[i][1])
-
-            self._prev_in_count = self.counter.in_count
-
-            # -----------------------------------------------------------
-            # Gender inference + tally (for ALL visible tracks)
-            # -----------------------------------------------------------
-            for tid, cx, cy, x1, y1, x2, y2 in track_info:
-                h, w = frame.shape[:2]
-                crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
-
-                gender = None
-                if crop.size > 0:
-                    gender = self.gender_classifier.get_gender(tid, crop, frame_idx)
-
-                # Tally only if this track entered AND has a resolved gender
-                if gender and tid in self._pending_gender and tid not in self._counted_genders:
+        # 3. Embedding Extraction
+        embeddings = self.reid_engine.extract_features(valid_crops)
+        
+        # 4. Re-ID Tracking & Matching
+        assigned_ids = self.reid_tracker.update(embeddings, frame_idx)
+        
+        # 5. Gender Tallying (Only fully locked predictions)
+        for i, tid in enumerate(assigned_ids):
+            # If not assigned (e.g. invalid embedding), skip
+            if tid == -1: continue
+                
+            x1, y1, x2, y2 = valid_boxes[i]
+            crop = valid_crops[i]
+            
+            # Continuously vote on gender whenever target is visible
+            gender = self.gender_classifier.get_gender(tid, crop, frame_idx)
+            
+            if gender:
+                # We only want to tally a visitor's demographic ONCE per unique visit
+                if tid not in self._counted_genders:
                     self._counted_genders.add(tid)
-                    self._pending_gender.discard(tid)
                     if gender == "Male":
                         self.male_count += 1
                     elif gender == "Female":
                         self.female_count += 1
                     else:
                         self.unknown_count += 1
-
-                # Draw gender label on bounding box regardless
-                if gender:
-                    color = (
-                        (255, 200, 0) if gender == "Male"
-                        else (0, 255, 255) if gender == "Female"
-                        else (200, 200, 200)
-                    )
-                    cv2.putText(
-                        annotated_frame, gender,
-                        (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA,
-                    )
-
-        # Evict lost tracks — force-tally pending ones as Unknown
-        for t in list(self._pending_gender):
-            if t not in current_ids:
-                self._pending_gender.discard(t)
-                if t not in self._counted_genders:
-                    self._counted_genders.add(t)
-                    self.unknown_count += 1
+                
+                # Draw Box and Label
+                color = (
+                    (255, 200, 0) if gender == "Male"
+                    else (0, 255, 255) if gender == "Female"
+                    else (200, 200, 200)
+                )
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+                label = f"#{tid} {gender}"
+                cv2.putText(
+                    annotated_frame, label,
+                    (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA,
+                )
+            else:
+                # Still voting, draw gray box
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (100, 100, 100), 2)
+                cv2.putText(
+                    annotated_frame, f"#{tid} [...]",
+                    (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 100), 2, cv2.LINE_AA,
+                )
 
         self.gender_classifier.clean_stale_tracks(frame_idx)
-        return annotated_frame, self.counter.in_count, self.counter.out_count
+        
+        return annotated_frame, self.reid_tracker.cumulative_visitors

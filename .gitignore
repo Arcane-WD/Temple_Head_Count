@@ -20,16 +20,20 @@ env/
 
 # Data and Media
 data/
+*.png
 *.mp4
 *.avi
 *.mov
+*.dav
 
 # Model Weights (large binary files)
 *.pt
 *.onnx
 
-# Ultralytics auto-generated
-runs/
+# Generated exports
+*.txt
+old_pipeline_export.txt
+project_codebase.txt
 
 # Logs
 *.log
@@ -44,6 +48,9 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/.env*.local
+node_modules/
+.next/
+package-lock.json
 
 # Temporary files
 *.tmp

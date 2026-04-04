@@ -8,3 +8,9 @@ numpy
 shapely
 fastapi
 uvicorn[standard]
+gdown
+torchvision
+torchaudio
+pybind11<2.11
+scipy
+lapx

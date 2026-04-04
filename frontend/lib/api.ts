@@ -35,8 +35,7 @@ export interface StatusUpdate {
   status: string;
   frame: number;
   total_frames: number;
-  in_count: number;
-  out_count: number;
+  visitors: number;
   male: number;
   female: number;
   unknown: number;
@@ -71,15 +70,13 @@ export function subscribeToStatus(
 
 export interface JobResults {
   status: string;
-  in_count: number;
-  out_count: number;
+  visitors: number;
   male: number;
   female: number;
   unknown: number;
   timeline: Array<{
     frame: number;
-    in_count: number;
-    out_count: number;
+    visitors: number;
     male: number;
     female: number;
     unknown: number;

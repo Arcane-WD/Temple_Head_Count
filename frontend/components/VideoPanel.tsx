@@ -4,7 +4,7 @@ import { useRef, useMemo } from "react";
 
 interface TimelinePoint {
   frame: number;
-  in_count: number;
+  visitors: number;
 }
 
 interface VideoPanelProps {
@@ -27,7 +27,7 @@ export default function VideoPanel({ videoUrl, timeline, fps, totalFrames }: Vid
     // Calculate deltas between consecutive points
     const deltas = timeline.slice(1).map((point, i) => ({
       frame: point.frame,
-      delta: point.in_count - timeline[i].in_count,
+      delta: point.visitors - timeline[i].visitors,
     }));
 
     // Find max delta to set threshold

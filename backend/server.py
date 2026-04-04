@@ -3,6 +3,7 @@ import sys
 import uuid
 import json
 import time
+import queue
 import threading
 import shutil
 import subprocess
@@ -15,7 +16,6 @@ from pydantic import BaseModel
 
 import config
 from core.counter import TempleCounter
-from calibrate import auto_calibrate_gate
 from utils.video_io import get_video_properties, create_video_writer
 
 app = FastAPI(title="Temple Analytics API")
@@ -75,15 +75,14 @@ def start_processing(req: ProcessRequest):
         "filename": req.filename,
         "frame": 0,
         "total_frames": 0,
-        "in_count": 0,
-        "out_count": 0,
+        "visitors": 0,
         "male": 0,
         "female": 0,
         "unknown": 0,
         "fps": 0,
         "warnings": [],
         "errors": [],
-        "timeline": [],        # [{frame, in_count, out_count, male, female, unknown}]
+        "timeline": [],        # [{frame, visitors, male, female, unknown}]
         "output_file": None,
         "done": False,
     }
@@ -119,40 +118,7 @@ def _run_pipeline(job_id: str, video_path: str):
             return
 
         # ── Calibration ──────────────────────────────────────────────────
-        if config.AUTO_CALIBRATE:
-            job["status"] = "calibrating"
-
-            if total_frames < config.MIN_FRAMES_FOR_CALIBRATION:
-                job["warnings"].append({
-                    "code": "LOW_FRAME_COUNT",
-                    "message": f"Video too short for calibration ({total_frames} frames). Using manual gate line.",
-                    "layman": "This video clip is too short for the system to analyze movement patterns. The default counting line will be used instead."
-                })
-            else:
-                dynamic_frames = min(
-                    config.MAX_CALIBRATION_FRAMES,
-                    int(total_frames * config.CALIBRATION_FRACTION),
-                )
-                cal_result = auto_calibrate_gate(video_path, frames_to_analyze=dynamic_frames)
-
-                if cal_result["status"] == "chaotic_motion":
-                    job["errors"].append({
-                        "code": "CHAOTIC_MOTION",
-                        "message": cal_result["message"],
-                        "layman": cal_result["layman"],
-                    })
-                    job["status"] = "error"
-                    job["done"] = True
-                    return
-                elif cal_result["status"] == "chaotic_motion_warn":
-                    job["warnings"].append({
-                        "code": "CHAOTIC_MOTION_WARN",
-                        "message": cal_result["message"],
-                        "layman": cal_result["layman"],
-                    })
-                    config.GATE_LINE = cal_result["gate_line"]
-                elif cal_result["status"] == "success":
-                    config.GATE_LINE = cal_result["gate_line"]
+        # (Calibration step removed: Gate lines are no longer needed for Re-ID counting)
 
         # ── Processing ───────────────────────────────────────────────────
         job["status"] = "processing"
@@ -162,42 +128,94 @@ def _run_pipeline(job_id: str, video_path: str):
         basename = os.path.splitext(os.path.basename(video_path))[0]
         output_filename = f"temple_output_{basename}.mp4"
         output_path = os.path.join(config.ANNOTATED_DIR, output_filename)
-        out = create_video_writer(output_path, w, h, fps)
+
+        # Timelapse writer: output fps matches processing rate, not source rate
+        timelapse_fps = max(1, fps // config.REID_SKIP_FRAMES)
+
+        # Async video writer: decouple disk I/O from ML loop
+        write_queue = queue.Queue(maxsize=30)
+        write_done = threading.Event()
+
+        def writer_thread():
+            out = create_video_writer(output_path, w, h, timelapse_fps)
+            while True:
+                item = write_queue.get()
+                if item is None:
+                    break
+                out.write(item)
+                write_queue.task_done()
+            out.release()
+            write_done.set()
+
+        wt = threading.Thread(target=writer_thread, daemon=True)
+        wt.start()
 
         engine = TempleCounter()
-        frame_count = 0
-        sample_interval = max(1, total_frames // 200)  # ~200 data points for chart
 
+        # ── Local tracking vars (avoid GIL contention on job dict) ────
+        current_frame = 0
+        current_visitors = 0
+        current_male = 0
+        current_female = 0
+        current_unknown = 0
+        pipeline_done = threading.Event()
+
+        # ── Reporting thread: syncs locals → job dict every 2s ────────
+        def reporting_thread():
+            while not pipeline_done.is_set():
+                time.sleep(2)
+                job["frame"] = current_frame
+                job["visitors"] = current_visitors
+                job["male"] = current_male
+                job["female"] = current_female
+                job["unknown"] = current_unknown
+                job["timeline"].append({
+                    "frame": current_frame,
+                    "visitors": current_visitors,
+                    "male": current_male,
+                    "female": current_female,
+                    "unknown": current_unknown,
+                })
+
+        rt = threading.Thread(target=reporting_thread, daemon=True)
+        rt.start()
+
+        # ── ML hot loop (no job dict writes here) ─────────────────────
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            annotated_frame, in_count, out_count = engine.process_frame(frame, frame_count)
-            out.write(annotated_frame)
+            annotated_frame, visitors = engine.process_frame(frame, current_frame)
 
-            job["frame"] = frame_count
-            job["in_count"] = in_count
-            job["out_count"] = out_count
-            job["male"] = engine.male_count
-            job["female"] = engine.female_count
-            job["unknown"] = engine.unknown_count
+            # Only queue processed frames (skipped frames return None)
+            if annotated_frame is not None:
+                if not write_queue.full():
+                    write_queue.put_nowait(annotated_frame)
 
-            # Sample timeline data for chart
-            if frame_count % sample_interval == 0:
-                job["timeline"].append({
-                    "frame": frame_count,
-                    "in_count": in_count,
-                    "out_count": out_count,
-                    "male": engine.male_count,
-                    "female": engine.female_count,
-                    "unknown": engine.unknown_count,
-                })
+            current_frame += 1
+            current_visitors = visitors
+            current_male = engine.male_count
+            current_female = engine.female_count
+            current_unknown = engine.unknown_count
 
-            frame_count += 1
-
+        # ── Cleanup ───────────────────────────────────────────────────
         cap.release()
-        out.release()
+
+        # Stop reporting thread
+        pipeline_done.set()
+        rt.join(timeout=5)
+
+        # Final commit to job dict (ensures last-frame accuracy)
+        job["frame"] = current_frame
+        job["visitors"] = current_visitors
+        job["male"] = current_male
+        job["female"] = current_female
+        job["unknown"] = current_unknown
+
+        # Stop writer thread
+        write_queue.put(None)
+        write_done.wait()
 
         # Re-encode to H.264 for browser playback (mp4v is not browser-compatible)
         job["status"] = "encoding"
@@ -222,12 +240,11 @@ def _run_pipeline(job_id: str, video_path: str):
 
         # Final timeline point
         job["timeline"].append({
-            "frame": frame_count,
-            "in_count": job["in_count"],
-            "out_count": job["out_count"],
-            "male": engine.male_count,
-            "female": engine.female_count,
-            "unknown": engine.unknown_count,
+            "frame": current_frame,
+            "visitors": current_visitors,
+            "male": current_male,
+            "female": current_female,
+            "unknown": current_unknown,
         })
 
         job["output_file"] = output_filename
@@ -263,8 +280,7 @@ def stream_status(job_id: str):
                     "status": job["status"],
                     "frame": job["frame"],
                     "total_frames": job["total_frames"],
-                    "in_count": job["in_count"],
-                    "out_count": job["out_count"],
+                    "visitors": job["visitors"],
                     "male": job["male"],
                     "female": job["female"],
                     "unknown": job["unknown"],
@@ -293,8 +309,7 @@ def get_results(job_id: str):
     job = jobs[job_id]
     return {
         "status": job["status"],
-        "in_count": job["in_count"],
-        "out_count": job["out_count"],
+        "visitors": job["visitors"],
         "male": job["male"],
         "female": job["female"],
         "unknown": job["unknown"],

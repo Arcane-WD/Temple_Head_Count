@@ -16,22 +16,23 @@ export default function ModelSidebar() {
             <span className="text-gray-300 font-medium">YOLOv8s</span>
           </p>
           <p className="text-xs text-gray-500">Person detection (class 0)</p>
-          <p className="text-xs text-gray-500">Confidence: 0.35 | IoU: 0.65</p>
+          <p className="text-xs text-gray-500">Confidence: 0.50 | IoU: 0.65</p>
         </div>
       </div>
 
-      {/* Tracking */}
+      {/* Re-ID Tracking */}
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-blue-400" />
-          <span className="text-sm font-medium text-gray-200">Tracking</span>
+          <span className="text-sm font-medium text-gray-200">Re-ID Tracking</span>
         </div>
         <div className="pl-4 space-y-1">
           <p className="text-xs text-gray-400">
-            <span className="text-gray-300 font-medium">ByteTrack</span>
+            <span className="text-gray-300 font-medium">OSNet-x1_0</span>
           </p>
-          <p className="text-xs text-gray-500">Multi-object tracker</p>
-          <p className="text-xs text-gray-500">Buffer: 60 frames</p>
+          <p className="text-xs text-gray-500">512-dim embedding matching</p>
+          <p className="text-xs text-gray-500">Threshold: 0.65 | Skip: 5 frames</p>
+          <p className="text-xs text-gray-500">Grace period: 7500 frames</p>
         </div>
       </div>
 
@@ -64,21 +65,6 @@ export default function ModelSidebar() {
           <p className="text-xs text-gray-500">100,000 pedestrian images</p>
           <p className="text-xs text-gray-500">26 binary attributes</p>
           <p className="text-xs text-gray-500">Outdoor surveillance domain</p>
-        </div>
-      </div>
-
-      {/* Calibration */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-cyan-400" />
-          <span className="text-sm font-medium text-gray-200">Calibration</span>
-        </div>
-        <div className="pl-4 space-y-1">
-          <p className="text-xs text-gray-400">
-            <span className="text-gray-300 font-medium">Kinematic PCA</span>
-          </p>
-          <p className="text-xs text-gray-500">Motion-vector based gate line</p>
-          <p className="text-xs text-gray-500">Auto-calibrate enabled</p>
         </div>
       </div>
     </aside>

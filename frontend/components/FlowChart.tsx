@@ -13,8 +13,7 @@ import {
 
 interface TimelinePoint {
   frame: number;
-  in_count: number;
-  out_count: number;
+  visitors: number;
   male: number;
   female: number;
   unknown: number;
@@ -69,18 +68,9 @@ export default function FlowChart({ data, fps }: FlowChartProps) {
             />
             <Line
               type="monotone"
-              dataKey="in_count"
-              name="Entries (IN)"
+              dataKey="visitors"
+              name="Unique Visitors"
               stroke="#10b981"
-              strokeWidth={2}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
-            <Line
-              type="monotone"
-              dataKey="out_count"
-              name="Exits (OUT)"
-              stroke="#ef4444"
               strokeWidth={2}
               dot={false}
               activeDot={{ r: 4 }}

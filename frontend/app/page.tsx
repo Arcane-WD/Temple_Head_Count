@@ -27,8 +27,7 @@ export default function DashboardPage() {
 
   // Live stats
   const [stats, setStats] = useState({
-    in_count: 0,
-    out_count: 0,
+    visitors: 0,
     male: 0,
     female: 0,
     unknown: 0,
@@ -79,8 +78,7 @@ export default function DashboardPage() {
         id,
         (update) => {
           setStats({
-            in_count: update.in_count,
-            out_count: update.out_count,
+            visitors: update.visitors,
             male: update.male,
             female: update.female,
             unknown: update.unknown,
@@ -276,9 +274,8 @@ export default function DashboardPage() {
             <AlertBanner warnings={warnings} errors={errors} />
 
             {/* Stat cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-              <StatCard label="Entries" value={stats.in_count} icon="↓" color="green" subtitle="IN count" />
-              <StatCard label="Exits" value={stats.out_count} icon="↑" color="red" subtitle="OUT count" />
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <StatCard label="Visitors" value={stats.visitors} icon="👥" color="green" subtitle="Unique identities" />
               <StatCard label="Male" value={stats.male} icon="♂" color="blue" subtitle="Classified" />
               <StatCard label="Female" value={stats.female} icon="♀" color="amber" subtitle="Classified" />
               <StatCard label="Unknown" value={stats.unknown} icon="?" color="purple" subtitle="Low confidence" />
