@@ -9,13 +9,15 @@ from core.reid_tracker import ReIDTracker
 from core.zone_filter import ZoneFilter
 
 class TempleCounter:
-    def __init__(self, camera_id="channel_1_main"):
+    def __init__(self, camera_id="channel_1_main", override_device=None):
+        device = override_device if override_device else config.DEVICE
+        
         # We use raw YOLO predict now, not ObjectCounter
         self.detector = YOLO(config.MODEL_PATH)
-        if config.DEVICE == "cuda":
-            self.detector.to(config.DEVICE)
+        if device == "cuda":
+            self.detector.to(device)
 
-        self.reid_engine = ReIDEngine(model_name=config.REID_MODEL, device=config.DEVICE)
+        self.reid_engine = ReIDEngine(model_name=config.REID_MODEL, device=device)
         self.reid_tracker = ReIDTracker(
             match_threshold=config.REID_MATCH_THRESHOLD,
             eviction_timeout=config.REID_EVICTION_TIMEOUT,
@@ -29,7 +31,7 @@ class TempleCounter:
             required_votes=config.GENDER_REQUIRED_VOTES,
             stale_timeout=config.STALE_TRACK_TIMEOUT,
             confidence_thresh=config.GENDER_CONF_THRESH,
-            device=config.DEVICE,
+            device=device,
         )
 
         # Track demographics for Unique Visitors

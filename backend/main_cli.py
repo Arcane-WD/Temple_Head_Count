@@ -9,9 +9,9 @@ from core.counter import TempleCounter
 import config
 
 
-def run_pipeline(video_path: str):
+def run_pipeline(video_path: str, device: str = None):
     print(f"\n{'='*60}")
-    print(f"  STARTING RE-ID COUNTING PIPELINE")
+    print(f"  STARTING RE-ID PIPELINE BENCHMARK: [{device.upper()}]")
     print(f"  Video: {video_path}")
     print(f"{'='*60}\n")
 
@@ -25,10 +25,10 @@ def run_pipeline(video_path: str):
 
     print(f"  Model      : {config.REID_MODEL} (skip every {config.REID_SKIP_FRAMES} frames)")
     print(f"  Threshold  : {config.REID_MATCH_THRESHOLD}")
-    print(f"  Device     : {config.DEVICE}")
+    print(f"  Device     : {device}")
     print(f"  Frames     : {total_frames} ({total_frames / fps / 60:.1f} min)\n")
 
-    counter = TempleCounter()
+    counter = TempleCounter(override_device=device)
     frame_idx = 0
     t0 = time.time()
 
@@ -70,13 +70,17 @@ def run_pipeline(video_path: str):
             print(f"  --- FRAME {frame_idx:>7} | {elapsed:.0f}s | Visitors: {v} | M:{m} F:{f} U:{u} ---")
 
         frame_idx += 1
+        
+        if frame_idx >= 2000:
+            print("\n  [Terminating early at 2000 frames for benchmark]")
+            break
 
     elapsed = time.time() - t0
     cap.release()
 
     print(f"\n{'='*60}")
     print(f"  PIPELINE COMPLETE")
-    print(f"  Time       : {elapsed:.1f}s ({total_frames / max(elapsed, 0.001):.1f} fps)")
+    print(f"  Time       : {elapsed:.1f}s ({frame_idx / max(elapsed, 0.001):.1f} fps)")
     print(f"  Visitors   : {counter.reid_tracker.cumulative_visitors}")
     print(f"  Male       : {counter.male_count}")
     print(f"  Female     : {counter.female_count}")
@@ -86,4 +90,13 @@ def run_pipeline(video_path: str):
 
 if __name__ == "__main__":
     test_video = os.path.join(config.INPUT_DIR, "temple_vid_1.mp4")
-    run_pipeline(test_video)
+    
+    print("\n\n" + "#"*60)
+    print(">>> 1. RUNNING CPU-ONLY BENCHMARK")
+    print("#"*60)
+    run_pipeline(test_video, device="cpu")
+    
+    print("\n\n" + "#"*60)
+    print(">>> 2. RUNNING CUDA GPU BENCHMARK")
+    print("#"*60)
+    run_pipeline(test_video, device="cuda")

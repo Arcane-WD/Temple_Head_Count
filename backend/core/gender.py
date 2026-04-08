@@ -12,6 +12,8 @@ class GenderClassifier:
 
         try:
             self.session = ort.InferenceSession(model_path, providers=providers)
+            active_provider = self.session.get_providers()[0]
+            print(f"  Gender ONNX: {active_provider}")
             self.input_name = self.session.get_inputs()[0].name
             
             output_details = self.session.get_outputs()[0]
