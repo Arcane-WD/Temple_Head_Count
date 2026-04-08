@@ -137,4 +137,11 @@ class TempleCounter:
 
         self.gender_classifier.clean_stale_tracks(frame_idx)
         
+        # Micro-optimization: prevent _counted_genders from growing infinitely over weeks of uptime
+        expired_genders = [tid for tid in self._counted_genders 
+                           if tid not in self.reid_tracker.active_tracks 
+                           and tid not in self.reid_tracker.departed_tracks]
+        for tid in expired_genders:
+            self._counted_genders.remove(tid)
+            
         return annotated_frame, self.reid_tracker.cumulative_visitors
