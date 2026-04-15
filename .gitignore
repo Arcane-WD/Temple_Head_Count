@@ -26,6 +26,12 @@ data/
 *.mov
 *.dav
 
+# Shared Assets (Models and Video Files)
+global_assets/models/*
+global_assets/input_vids/*
+!global_assets/models/.gitkeep
+!global_assets/input_vids/.gitkeep
+
 # Model Weights (large binary files)
 *.pt
 *.onnx

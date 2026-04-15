@@ -6,149 +6,106 @@ The system uses **YOLOv8** for detection, **OSNet Re-ID** embeddings for identit
 
 ---
 
-## Architecture & Performance
+## 🏛️ Pipeline Versions
 
-The system is engineered for maximum throughput by decoupling heavy ML inference from I/O and reporting.
+This repository contains two parallel backends serving a single unified frontend dashboard.
 
--   **Decoupled ML Loop**: The main processing loop runs at full GPU speed, isolated from disk I/O and network reporting.
--   **Threaded Reporting**: Progress updates (SSE) and timeline logging run on a separate heartbeat thread to prevent GIL contention.
--   **Async Video Writer**: Annotated frames are written via a threaded producer-consumer queue.
--   **Timelapse Output**: The system generates a high-efficiency timelapse video (`fps / SKIP_FRAMES`), drastically reducing disk usage and encoding time.
--   **Zero-Copy Skip-Frames**: Detections are performed every $k$ frames; skipped frames skip all memory allocations, copies, and drawing operations.
+| Version | Status | Description |
+|---|---|---|
+| **V1 (Skip-Frame)** | 🟢 Stable MVP | Traditional approach: performs heavy inference strictly every $k$ frames and uses Hungarian matching to map visitor persistence. Best for stability and baseline measurements. |
+| **V2 (Adaptive)** | 🟡 In Development | High-performance approach: utilizes **YOLOv8n + ByteTrack always-on**, removing tracker drift. Expensive ML operations (Re-ID, Gender) are only selectively queued natively on targeted events (new tracks, confidence drops, occlusion warnings). |
+
+---
+
+## 🏗️ Architecture 
+
+The codebase heavily decouples UI components, AI orchestration, and memory-heavy machine learning models.
 
 ```
 temple_proj/
-├── backend/                     Python ML pipeline + FastAPI server
-│   ├── core/
-│   │   ├── counter.py           Orchestrator: YOLO → ZoneFilter → ReID → Gender
-│   │   ├── reid_engine.py       OSNet-x1_0 feature extraction (torchreid)
-│   │   ├── reid_tracker.py      Hungarian matching, EMA updates, grace period
-│   │   ├── zone_filter.py       Polygon-based worker exclusion zones
-│   │   └── gender.py            ConvNeXt-Tiny ONNX gender classifier
-│   ├── utils/
-│   │   └── video_io.py          Video capture/writer helpers
-│   ├── data/
-│   │   ├── input_vids/          Source video files (.mp4)
-│   │   └── output_vids/         Annotated output and logs
-│   ├── config.py                All thresholds, model paths, zone definitions
-│   ├── server.py                Highly optimized FastAPI server (Async I/O + Threaded Reporting)
-│   ├── main_cli.py              Standalone CLI runner (no server needed)
-│   ├── requirements.txt
-│   ├── yolov8s.pt               YOLO weights (not committed)
-│   └── convnext_tiny_*.onnx     Gender model (not committed)
+├── global_assets/               Shared heavy dependencies (ignored in git)
+│   ├── input_vids/              Source video files (.mp4)
+│   └── models/                  yolov8n.pt, yolov8s.pt, convnext_tiny.onnx
 │
-├── frontend/                    Next.js analytics dashboard
-│   ├── app/                     Page routes and global styles
-│   ├── components/              StatCard, FlowChart, VideoPanel, etc.
-│   ├── lib/                     API client and TypeScript types
-│   └── package.json
+├── frontend/                    Global Next.js analytics dashboard
 │
-├── aggregate_code.py            Codebase export utility
-├── test_run.py                  Diagnostic script (PCA, similarity plots)
+├── v1_skipframe/                [STABLE] Original skip-frame MVP pipeline
+│   └── backend/                 FastAPI server + Logic
+│
+├── v2_adaptive/                 [IN DEVELOPMENT] High-performance hybrid tracking pipeline
+│   └── backend/                 FastAPI server + Identity Vault Logic
+│
 └── README.md
 ```
 
 ---
 
-## Pipeline Flow
-
-```
-Video Frame (every 5th frame)
-    │
-    ▼
-YOLOv8s Detection ─── conf > 0.50, class 0 (person)
-    │
-    ▼
-Zone Filter ─── skip detections inside worker exclusion polygons
-    │
-    ▼
-OSNet-x1_0 Re-ID ─── 512-dim L2-normalized embeddings
-    │
-    ▼
-Hungarian Matching ─── cosine distance, θ = 0.65
-    ├── Matched → update active track (EMA embedding)
-    ├── Matched (departed) → re-activate (no new count)
-    └── Unmatched → new visitor (+1 cumulative)
-    │
-    ▼
-ConvNeXt-Tiny Gender ─── majority vote, locked after 5 frames
-    │
-    ▼
-Terminal / Dashboard Output
-```
-
----
-
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 
 - Python 3.10+
 - Node.js 18+
 - `ffmpeg` (required for browser-compatible video re-encoding)
-- YOLO weights (`yolov8s.pt`) in `backend/`
-- Gender ONNX model (`convnext_tiny_gender_82.44acc.onnx`) in `backend/`
+- Downloaded Models: Place `yolov8s.pt`, `yolov8n.pt`, and the Gender ONNX model inside `/global_assets/models/`.
 
-### Install Dependencies
+### 1. Install Dependencies
 
 ```bash
-# Backend (activate your venv first)
-cd backend
-uv pip install -r requirements.txt
-
 # Frontend
 cd frontend
 npm install
+
+# Backend (activate your venv first, required for both V1 and V2)
+cd v1_skipframe/backend  # (or v2_adaptive/backend)
+pip install -r requirements.txt
 ```
 
-### CLI Testing (No Server)
+### 2. Run the Full Stack
 
-```bash
-cd backend
-python main_cli.py
-```
+Both versions share the exact same UI interface. You just need to run the global frontend alongside the backend version of your preference.
 
-### Full Stack (Server + Dashboard)
-
-**Terminal 1 (Backend):**
-```bash
-cd backend
-python server.py
-```
-
-**Terminal 2 (Frontend):**
+**Terminal 1 (The Global Frontend):**
 ```bash
 cd frontend
 npm run dev
 ```
 
+**Terminal 2 (Run Stable V1 Backend):**
+```bash
+cd v1_skipframe/backend
+python server.py
+```
+*(The FastAPI server will boot on `localhost:8000`. Navigate to `localhost:3000` to interact with V1).*
+
+### 3. Testing V2 (In Development)
+
+If you'd like to test the experimental adaptive tracker:
+```bash
+cd v2_adaptive/backend
+python server.py
+# Or run the CLI GPU diagnostic tool:
+# python demo_gpu.py --video your_video.mp4
+```
+
 ---
 
-## Configuration
+## ⚙️ Configuration
 
-Settings are centralized in [`backend/config.py`](backend/config.py):
+Settings for both pipelines are safely scoped inside their respective `backend/config.py` files.
 
-| Parameter | Default | Description |
+| Parameter | Used By | Description |
 |---|---|---|
-| `CONF_THRESH` | `0.50` | YOLO detection confidence |
-| `REID_MODEL` | `osnet_x1_0` | Re-ID model variant |
-| `REID_SKIP_FRAMES` | `5` | Process every k-th frame |
-| `REID_MATCH_THRESHOLD` | `0.65` | Cosine similarity cutoff |
-| `REID_EVICTION_TIMEOUT` | `500` | Frames before evicting unseen tracks |
-| `REID_GRACE_PERIOD` | `7500` | Frames before forgetting departed tracks |
-| `EXCLUSION_ZONES` | `{}` | Per-camera worker exclusion polygons |
-| `GENDER_REQUIRED_VOTES` | `5` | Frames before locking gender |
+| `REID_SKIP_FRAMES` | V1 Only | How often to process frames (e.g., 5). |
+| `DETECTION_INTERVAL`| V2 Only | Frames between active trigger queuing. |
+| `MAX_REID_PER_FRAME`| V2 Only | Upper limit constraint on Re-ID extractions. |
+| `REID_MODEL` | Both | Re-ID model variant. |
+| `GENDER_REQUIRED_VOTES` | Both | Confidence votes needed before caching gender. |
 
 ---
 
-## Diagnostics
+## 🔍 Limitations & Diagnostics
 
-Run `test_run.py` from the project root to validate YOLO detection rates, cluster quality (PCA), and similarity distribution. This is recommended before running on large datasets to ensure the $\theta$ threshold is optimal for your camera angles.
-
----
-
-## Limitations
-
-- Single-camera counting is verified; cross-camera deduplication is in development.
-- Re-entry after the grace period (~5 mins @ 25fps) counts as a new visit.
-- Gender accuracy depends on visibility and resolution of the face/body.
+- **Cross-camera deduplication:** Single-camera counting is heavily verified; full multi-camera meshing is under active development.
+- **Grace Periods:** Re-entry after the defined config grace period (~5 mins) will trigger a fresh count sequence. 
+- You can run `test_run.py` to validate baseline YOLO detection speeds and verify Re-ID embedding clustering quality (PCA) on native hardware before scaling.

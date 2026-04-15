@@ -95,6 +95,7 @@ def start_processing(req: ProcessRequest):
 
 def _run_pipeline(job_id: str, video_path: str):
     """Background pipeline runner."""
+    pipeline_start = time.time()
     job = jobs[job_id]
 
     try:
@@ -137,14 +138,32 @@ def _run_pipeline(job_id: str, video_path: str):
         write_done = threading.Event()
 
         def writer_thread():
-            out = create_video_writer(output_path, w, h, timelapse_fps)
+            # Open an FFmpeg subprocess directly
+            command = [
+                'ffmpeg',
+                '-y', # Overwrite
+                '-f', 'rawvideo',
+                '-vcodec', 'rawvideo',
+                '-s', '1280x720',
+                '-pix_fmt', 'bgr24',
+                '-r', str(timelapse_fps),
+                '-i', '-', # Read from stdin
+                '-c:v', 'libx264',
+                '-preset', 'superfast',
+                '-pix_fmt', 'yuv420p',
+                output_path
+            ]
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            
             while True:
                 item = write_queue.get()
                 if item is None:
                     break
-                out.write(item)
+                process.stdin.write(item.tobytes())
                 write_queue.task_done()
-            out.release()
+                
+            process.stdin.close()
+            process.wait()
             write_done.set()
 
         wt = threading.Thread(target=writer_thread, daemon=True)
@@ -191,7 +210,8 @@ def _run_pipeline(job_id: str, video_path: str):
             # Only queue processed frames (skipped frames return None)
             if annotated_frame is not None:
                 if not write_queue.full():
-                    write_queue.put_nowait(annotated_frame)
+                    small_frame = cv2.resize(annotated_frame, (1280, 720))
+                    write_queue.put_nowait(small_frame)
 
             current_frame += 1
             current_visitors = visitors
@@ -217,26 +237,10 @@ def _run_pipeline(job_id: str, video_path: str):
         write_queue.put(None)
         write_done.wait()
 
-        # Re-encode to H.264 for browser playback (mp4v is not browser-compatible)
-        job["status"] = "encoding"
-        web_output = output_path.replace(".mp4", "_web.mp4")
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-i", output_path,
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                    "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart",
-                    "-an", "-y", web_output,
-                ],
-                check=True, capture_output=True,
-            )
-            os.replace(web_output, output_path)
-            print(f"Re-encoded to H.264: {output_path}")
-        except FileNotFoundError:
-            print("ffmpeg not found — serving raw mp4v (may not play in browser)")
-        except subprocess.CalledProcessError as enc_err:
-            print(f"ffmpeg re-encode failed: {enc_err.stderr.decode()}")
+        # Ending time log
+        elapsed = time.time() - pipeline_start
+        processing_fps = current_frame / max(elapsed, 0.001)
+
 
         # Final timeline point
         job["timeline"].append({
@@ -250,6 +254,24 @@ def _run_pipeline(job_id: str, video_path: str):
         job["output_file"] = output_filename
         job["status"] = "complete"
         job["done"] = True
+
+        # ── Final summary log (mirrors CLI output for demo visibility) ────
+        device_label = "GPU" if config.DEVICE == "cuda" else "CPU"
+
+        print(f"\n{'='*60}")
+        print(f"")
+        print(f"  ██  {device_label} RESULT  ██")
+        print(f"  Frames     : {current_frame}")
+        print(f"  Time       : {elapsed:.1f}s")
+        print(f"  Speed      : {processing_fps:.1f} fps")
+        print(f"  Visitors   : {current_visitors}")
+        print(f"  ")
+        print(f"  ")
+        print(f"  Male       : {current_male}")
+        print(f"  Female     : {current_female}")
+        print(f"  Unknown    : {current_unknown}")
+        print(f"")
+        print(f"{'='*60}\n")
 
     except Exception as e:
         job["errors"].append({

@@ -70,10 +70,6 @@ def run_pipeline(video_path: str, device: str = None):
             print(f"  --- FRAME {frame_idx:>7} | {elapsed:.0f}s | Visitors: {v} | M:{m} F:{f} U:{u} ---")
 
         frame_idx += 1
-        
-        if frame_idx >= 2000:
-            print("\n  [Terminating early at 2000 frames for benchmark]")
-            break
 
     elapsed = time.time() - t0
     cap.release()
@@ -89,7 +85,16 @@ def run_pipeline(video_path: str, device: str = None):
 
 
 if __name__ == "__main__":
-    test_video = os.path.join(config.INPUT_DIR, "temple_vid_1.mp4")
+    import argparse
+    parser = argparse.ArgumentParser(description="Temple Analytics Benchmark")
+    parser.add_argument("--video", type=str, default="demo_clip_1.mp4", help="Name of the video in data/input_vids")
+    args = parser.parse_args()
+
+    test_video = os.path.join(config.INPUT_DIR, args.video)
+    
+    if not os.path.exists(test_video):
+        print(f"Error: Could not find {test_video}. Make sure to run extract_clips.py first!")
+        sys.exit(1)
     
     print("\n\n" + "#"*60)
     print(">>> 1. RUNNING CPU-ONLY BENCHMARK")
