@@ -42,7 +42,7 @@ class TempleCounter:
         self.healed_switches = 0
         
         # ByteTrack State
-        # tid -> {"global_id": int, "last_conf": float, "last_area": float}
+        # tid -> {"global_id": int, "last_conf": float, "last_area": float, "missed_frames": int}
         self.track_data = {}
 
     def process_frame(self, frame, frame_idx):
@@ -92,7 +92,7 @@ class TempleCounter:
             
             if tid not in self.track_data:
                 trigger_reason = "new_track"
-                self.track_data[tid] = {"global_id": None, "last_conf": conf, "last_area": area}
+                self.track_data[tid] = {"global_id": None, "last_conf": conf, "last_area": area, "missed_frames": 0}
             else:
                 prev_data = self.track_data[tid]
                 
@@ -105,6 +105,7 @@ class TempleCounter:
                 # Update state
                 prev_data["last_conf"] = conf
                 prev_data["last_area"] = area
+                prev_data["missed_frames"] = 0  # Reset miss counter on being seen
                 
                 # Update Vault timestamp
                 gid = prev_data["global_id"]
@@ -191,10 +192,13 @@ class TempleCounter:
         active_gids = set(self.reid_tracker.active_identities.keys()) | set(self.reid_tracker.departed_identities.keys())
         self._counted_genders = {g for g in self._counted_genders if g in active_gids}
         
+        # Increment missed_frames for tracks not seen this frame, evict after tolerance window
+        MISS_TOLERANCE = 10  # frames to wait before evicting stale ByteTrack ID state
         current_tids = {det["track_id"] for det in valid_detections}
-        stale_tids = [t for t in self.track_data if t not in current_tids]
-        for t in stale_tids:
-            # We can pop t immediately since ByteTrack assigns a new ID if completely lost
-            self.track_data.pop(t, None)
+        for t in list(self.track_data.keys()):
+            if t not in current_tids:
+                self.track_data[t]["missed_frames"] = self.track_data[t].get("missed_frames", 0) + 1
+                if self.track_data[t]["missed_frames"] > MISS_TOLERANCE:
+                    self.track_data.pop(t, None)
 
         return annotated_frame, self.reid_tracker.cumulative_visitors

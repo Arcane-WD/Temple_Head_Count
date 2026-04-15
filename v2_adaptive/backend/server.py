@@ -7,6 +7,7 @@ import queue
 import threading
 import shutil
 import subprocess
+import traceback
 
 import cv2
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -130,8 +131,8 @@ def _run_pipeline(job_id: str, video_path: str):
         output_filename = f"temple_output_{basename}.mp4"
         output_path = os.path.join(config.ANNOTATED_DIR, output_filename)
 
-        # Timelapse writer: output fps matches processing rate, not source rate
-        timelapse_fps = max(1, fps // config.REID_SKIP_FRAMES)
+        # V2 runs tracking every frame — output fps equals source fps
+        output_fps = max(1, fps)
 
         # Async video writer: decouple disk I/O from ML loop
         write_queue = queue.Queue(maxsize=30)
@@ -146,7 +147,7 @@ def _run_pipeline(job_id: str, video_path: str):
                 '-vcodec', 'rawvideo',
                 '-s', '1280x720',
                 '-pix_fmt', 'bgr24',
-                '-r', str(timelapse_fps),
+                '-r', str(output_fps),
                 '-i', '-', # Read from stdin
                 '-c:v', 'libx264',
                 '-preset', 'superfast',
@@ -207,10 +208,10 @@ def _run_pipeline(job_id: str, video_path: str):
 
             annotated_frame, visitors = engine.process_frame(frame, current_frame)
 
-            # Only queue processed frames (skipped frames return None)
+            # V2 always returns an annotated frame — queue it every frame
             if annotated_frame is not None:
+                small_frame = cv2.resize(annotated_frame, (1280, 720))
                 if not write_queue.full():
-                    small_frame = cv2.resize(annotated_frame, (1280, 720))
                     write_queue.put_nowait(small_frame)
 
             current_frame += 1
@@ -274,6 +275,8 @@ def _run_pipeline(job_id: str, video_path: str):
         print(f"{'='*60}\n")
 
     except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[PIPELINE ERROR] {e}\n{tb}")
         job["errors"].append({
             "code": "PIPELINE_ERROR",
             "message": str(e),

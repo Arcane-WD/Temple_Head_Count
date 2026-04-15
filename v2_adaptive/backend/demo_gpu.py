@@ -29,7 +29,7 @@ def run_gpu(video_path: str):
 
     print(f"  Device     : CUDA (RTX 3050 Ti)")
     print(f"  Frames     : {total_frames} ({duration_min:.1f} min)")
-    print(f"  Skip       : every {config.REID_SKIP_FRAMES} frames\n")
+    print(f"  Interval   : Re-ID triggered every {config.DETECTION_INTERVAL} frames\n")
 
     counter = TempleCounter(override_device="cuda")
     frame_idx = 0

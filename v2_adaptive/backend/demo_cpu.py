@@ -29,13 +29,13 @@ def run_cpu(video_path: str):
 
     print(f"  Device     : CPU (AMD Ryzen 7 5800H)")
     print(f"  Frames     : {total_frames} ({duration_min:.1f} min)")
-    print(f"  Skip       : every {config.REID_SKIP_FRAMES} frames\n")
+    print(f"  Interval   : Re-ID triggered every {config.DETECTION_INTERVAL} frames\n")
 
     counter = TempleCounter(override_device="cpu")
     frame_idx = 0
     t0 = time.time()
 
-    hdr = f"{'FRAME':>7} | {'VISITORS':>8} | {'MALE':>4} | {'FEM':>4} | {'UNK':>4} | {'ACTIVE':>6} | {'TIME':>6}"
+    hdr = f"{'FRAME':>7} | {'VISITORS':>8} | {'MALE':>4} | {'FEM':>4} | {'UNK':>4} | {'ACTIVE':>6} | {'HEALED':>6} | {'TIME':>6}"
     print(hdr)
     print("-" * len(hdr))
 
@@ -55,8 +55,9 @@ def run_cpu(video_path: str):
             m = counter.male_count
             f = counter.female_count
             u = counter.unknown_count
-            active = len(counter.reid_tracker.active_tracks)
-            print(f"{frame_idx:>7} | {visitors:>8} | {m:>4} | {f:>4} | {u:>4} | {active:>6} | {elapsed:>5.0f}s")
+            active = len(counter.reid_tracker.active_identities)
+            healed = counter.healed_switches
+            print(f"{frame_idx:>7} | {visitors:>8} | {m:>4} | {f:>4} | {u:>4} | {active:>6} | {healed:>6} | {elapsed:>5.0f}s")
 
         frame_idx += 1
 
