@@ -12,7 +12,7 @@ def get_video_duration(video_path):
     cap.release()
     return frames / fps
 
-def extract_random_clip(input_path, output_path, duration_sec=80):
+def extract_random_clip(input_path, output_path, duration_sec=300):
     if not os.path.exists(input_path):
         print(f"File not found: {input_path}")
         return
@@ -54,7 +54,7 @@ def time_formatter(seconds):
 
 if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    input_dir = os.path.join(base_dir, "data", "input_vids")
+    input_dir = os.path.join(base_dir, "global_assets", "input_vids")
     
     vid1_in = os.path.join(input_dir, "temple_vid_1.mp4")
     vid2_in = os.path.join(input_dir, "temple_vid_2.mp4")
@@ -63,6 +63,6 @@ if __name__ == "__main__":
     vid2_out = os.path.join(input_dir, "demo_clip_2.mp4")
 
     print(f"Generating 2-minute demo clips in {input_dir}\n")
-    extract_random_clip(vid1_in, vid1_out, 120)
-    extract_random_clip(vid2_in, vid2_out, 120)
+    extract_random_clip(vid1_in, vid1_out, 300)
+    extract_random_clip(vid2_in, vid2_out, 300)
     print("\nExtraction complete! You can use demo_clip_1.mp4 and demo_clip_2.mp4 for the final showcase.")

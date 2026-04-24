@@ -42,7 +42,7 @@ class TempleCounter:
         self.healed_switches = 0
         
         # ByteTrack State
-        # tid -> {"global_id": int, "last_conf": float, "last_area": float, "missed_frames": int}
+        # tid -> {"global_id": int, "last_conf": float, "last_area": float, "missed_frames": int, "last_reid_frame": int}
         self.track_data = {}
 
     def process_frame(self, frame, frame_idx):
@@ -92,7 +92,7 @@ class TempleCounter:
             
             if tid not in self.track_data:
                 trigger_reason = "new_track"
-                self.track_data[tid] = {"global_id": None, "last_conf": conf, "last_area": area, "missed_frames": 0}
+                self.track_data[tid] = {"global_id": None, "last_conf": conf, "last_area": area, "missed_frames": 0, "last_reid_frame": -999}
             else:
                 prev_data = self.track_data[tid]
                 
@@ -101,6 +101,10 @@ class TempleCounter:
                     trigger_reason = "conf_drop"
                 elif prev_data["last_area"] > 0 and abs(area - prev_data["last_area"]) / prev_data["last_area"] > 0.3:
                     trigger_reason = "size_change"
+                    
+                # Prevent spamming re-checks for the identical track ID
+                if trigger_reason and frame_idx - prev_data.get("last_reid_frame", -999) < 15:
+                    trigger_reason = None
                 
                 # Update state
                 prev_data["last_conf"] = conf
@@ -129,30 +133,52 @@ class TempleCounter:
             })
 
         # 3. Intelligent Re-ID Execution
-        if frame_idx % config.DETECTION_INTERVAL == 0 and reid_queue:
+        # NEW tracks must be resolved immediately — we cannot afford to delay identity assignment.
+        # Event-based re-checks (conf_drop, size_change) are rate-limited by DETECTION_INTERVAL
+        # to avoid thrashing the Re-ID engine on every frame.
+        new_track_items = [item for item in reid_queue if item["reason"] == "new_track"]
+        event_items = (
+            [item for item in reid_queue if item["reason"] != "new_track"]
+            if frame_idx % config.DETECTION_INTERVAL == 0 else []
+        )
+        combined_queue = new_track_items + event_items
+
+        if combined_queue:
             def get_priority(item):
                 p_map = {"new_track": 3, "conf_drop": 2, "size_change": 1}
                 return (p_map.get(item["reason"], 0), item["conf"], item["area"])
                 
-            reid_queue.sort(key=get_priority, reverse=True)
-            reid_queue = reid_queue[:config.MAX_REID_PER_FRAME]
+            combined_queue.sort(key=get_priority, reverse=True)
+            combined_queue = combined_queue[:config.MAX_REID_PER_FRAME]
             
-            crops_to_extract = [item["crop"] for item in reid_queue]
+            crops_to_extract = [item["crop"] for item in combined_queue]
             embeddings = self.reid_engine.extract_features(crops_to_extract)
             
             for i, emb in enumerate(embeddings):
-                tid = reid_queue[i]["track_id"]
-                box = reid_queue[i]["box"]
+                tid = combined_queue[i]["track_id"]
+                box = combined_queue[i]["box"]
+                reason = combined_queue[i]["reason"]
+                current_gid = self.track_data[tid].get("global_id")
                 
-                gid = self.reid_tracker.match_identity(emb, frame_idx)
+                gid = self.reid_tracker.match_identity(emb, frame_idx, bbox=box, current_gid=current_gid)
+                
                 if gid is None:
-                    gid = self.reid_tracker.register_identity(emb, frame_idx, box)
+                    if current_gid is not None:
+                        # Event trigger (conf_drop/size_change) failed to match strongly due to pose/blur,
+                        # but didn't strongly match anyone else. IT IS STILL THE SAME PERSON.
+                        gid = current_gid
+                        self.reid_tracker.force_update_embedding(gid, emb, frame_idx)
+                        reason += " (kept existing)"
+                    else:
+                        gid = self.reid_tracker.register_identity(emb, frame_idx, box)
                 else:
-                    # Track fragmentation healed!
-                    if self.track_data[tid].get("global_id") != gid:
+                    # Track ID changed but embedding matched — fragmentation healed
+                    if current_gid is not None and current_gid != gid:
                         self.healed_switches += 1
                 
                 self.track_data[tid]["global_id"] = gid
+                self.track_data[tid]["last_reid_frame"] = frame_idx
+                print(f"[Frame {frame_idx}] ReID {reason}: tid={tid} → gid={gid}")
 
         # 4. Gender Tallying and Rendering
         for det in valid_detections:

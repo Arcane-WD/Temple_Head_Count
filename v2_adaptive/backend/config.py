@@ -28,7 +28,7 @@ TARGET_CLASSES = [0]
 REID_MODEL = "osnet_x1_0"
 DETECTION_INTERVAL = 3       # Frames between event triggers check
 MAX_REID_PER_FRAME = 5       # Max people to extract embeddings for on trigger
-REID_MATCH_THRESHOLD = 0.65  # Decreased from 0.75 to prevent track splitting
+REID_MATCH_THRESHOLD = 0.55  # Lowered from 0.88 to prevent track splintering and identity explosion
 REID_EVICTION_TIMEOUT = 500
 REID_GRACE_PERIOD = 7500
 
