@@ -87,21 +87,16 @@ def run_pipeline(video_path: str, device: str = None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Temple Analytics Benchmark")
-    parser.add_argument("--video", type=str, default="demo_clip_1.mp4", help="Name of the video in data/input_vids")
+    parser.add_argument("--video", type=str, default="temple_vid_1.mp4", help="Name of the video in global_assets/input_vids")
     args = parser.parse_args()
 
     test_video = os.path.join(config.INPUT_DIR, args.video)
     
     if not os.path.exists(test_video):
-        print(f"Error: Could not find {test_video}. Make sure to run extract_clips.py first!")
+        print(f"Error: Could not find {test_video}. Make sure it is placed in global_assets/input_vids!")
         sys.exit(1)
     
     print("\n\n" + "#"*60)
-    print(">>> 1. RUNNING CPU-ONLY BENCHMARK")
-    print("#"*60)
-    run_pipeline(test_video, device="cpu")
-    
-    print("\n\n" + "#"*60)
-    print(">>> 2. RUNNING CUDA GPU BENCHMARK")
+    print(">>> RUNNING CUDA GPU PIPELINE")
     print("#"*60)
     run_pipeline(test_video, device="cuda")

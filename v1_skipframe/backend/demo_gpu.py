@@ -1,11 +1,9 @@
-"""
-DEMO: CUDA GPU Pipeline
-Run this in one terminal while demo_cpu.py runs in another to show the speed difference.
-"""
 import cv2
 import time
 import os
 import sys
+import json
+import subprocess
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -14,7 +12,7 @@ import config
 
 def run_gpu(video_path: str):
     print(f"\n{'='*60}")
-    print(f"  ██  CUDA GPU PIPELINE  ██")
+    print(f"  ██  CUDA GPU PIPELINE (with Output & Plotter)  ██")
     print(f"  Video: {os.path.basename(video_path)}")
     print(f"{'='*60}\n")
 
@@ -40,7 +38,10 @@ def run_gpu(video_path: str):
     print("-" * len(hdr))
 
     last_milestone = 0
-
+    timeline = []
+    
+    basename = os.path.splitext(os.path.basename(video_path))[0]
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -57,6 +58,16 @@ def run_gpu(video_path: str):
             u = counter.unknown_count
             active = len(counter.reid_tracker.active_tracks)
             print(f"{frame_idx:>7} | {visitors:>8} | {m:>4} | {f:>4} | {u:>4} | {active:>6} | {elapsed:>5.0f}s")
+            
+            timeline.append({
+                "frame": frame_idx,
+                "visitors": visitors,
+                "male": m,
+                "female": f,
+                "unknown": u,
+                "active": active,
+                "time_sec": elapsed
+            })
 
         frame_idx += 1
 
@@ -70,11 +81,23 @@ def run_gpu(video_path: str):
     print(f"  Time       : {elapsed:.1f}s")
     print(f"  Speed      : {real_fps:.1f} fps")
     print(f"  Visitors   : {counter.reid_tracker.cumulative_visitors}")
-    print(f"  Male       : {counter.male_count}")
-    print(f"  Female     : {counter.female_count}")
-    print(f"  Unknown    : {counter.unknown_count}")
     print(f"{'='*60}\n")
-
+    
+    # Log JSON
+    log_path = os.path.join(config.LOG_DIR, f"log_{basename}.json")
+    os.makedirs(config.LOG_DIR, exist_ok=True)
+    with open(log_path, "w") as f:
+        json.dump({"timeline": timeline, "summary": {"visitors": counter.reid_tracker.cumulative_visitors, "fps": real_fps, "elapsed": elapsed}}, f, indent=4)
+        
+    print(f"  Data logged to: {log_path}")
+    print("  Starting plot viewer...")
+    
+    # Plot results
+    plotter_script = os.path.join(os.path.dirname(__file__), "plot_results.py")
+    if os.path.exists(plotter_script):
+        subprocess.Popen([sys.executable, plotter_script, "--log", log_path])
+    else:
+        print("  Error: plot_results.py not found.")
 
 if __name__ == "__main__":
     import argparse
@@ -84,7 +107,7 @@ if __name__ == "__main__":
 
     video_path = os.path.join(config.INPUT_DIR, args.video)
     if not os.path.exists(video_path):
-        print(f"Error: {video_path} not found. Run extract_clips.py first!")
+        print(f"Error: {video_path} not found. Ensure it is inside global_assets/input_vids.")
         sys.exit(1)
 
     run_gpu(video_path)
